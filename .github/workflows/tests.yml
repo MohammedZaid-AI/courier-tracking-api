@@ -1,0 +1,35 @@
+name: tests
+
+# Offline only: every check here runs against saved fixtures.
+# Nothing in this workflow passes --live or calls a courier site.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Unit and adapter tests
+        run: pytest
+
+      - name: All-cases script
+        run: python scripts/run_all_cases.py
+
+      - name: Drift check against saved fixtures (offline)
+        run: python -m courier_tracking.drift
