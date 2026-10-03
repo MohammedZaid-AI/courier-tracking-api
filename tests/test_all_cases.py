@@ -30,6 +30,13 @@ REQUIRED_OFFLINE = {
 REAL_AWB = "123456789012"
 
 
+@pytest.fixture(autouse=True)
+def _no_ci_unless_a_test_sets_it(monkeypatch):
+    """GitHub Actions sets CI=true, and --live refuses to run under CI. Start every test here
+    from a known environment; tests that check the CI guard set CI themselves."""
+    monkeypatch.delenv("CI", raising=False)
+
+
 def test_offline_cases_all_pass_and_cover_the_required_cases():
     rows = run_all_cases.run_offline()
     assert REQUIRED_OFFLINE <= {r.case for r in rows}
@@ -108,14 +115,20 @@ def test_live_unknown_id_that_turns_out_to_exist_shows_no_details(capsys):
     assert real == []
 
 
-def test_live_is_refused_in_ci(monkeypatch, capsys):
-    monkeypatch.setenv("CI", "true")
-    assert run_all_cases.main(["--live"]) == 2
-    assert "Refusing --live" in capsys.readouterr().err
+@pytest.mark.parametrize("ci_value", ["1", "true"])
+@pytest.mark.parametrize("argv", [["--live"], ["--live", "--id", f"trackon={REAL_AWB}"]])
+def test_live_is_refused_in_ci_and_makes_no_network_call(monkeypatch, capsys, ci_value, argv):
+    monkeypatch.setenv("CI", ci_value)
+    calls = []
+    code = run_all_cases.main(argv, live_client=mock_client(fake_trackon(page_with_personal_data(), calls=calls)))
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "Refusing --live" in captured.err
+    assert calls == []  # the guard runs before any request, live or offline
+    assert "PASS" not in captured.out  # and before any case runs
 
 
 @pytest.mark.parametrize("argv", [["--id", "trackon=123456789012"], ["--live", "--id", "bluedart=1"]])
-def test_bad_arguments_are_rejected(argv, monkeypatch):
-    monkeypatch.delenv("CI", raising=False)
+def test_bad_arguments_are_rejected(argv):
     with pytest.raises(SystemExit):
         run_all_cases.main(argv)
