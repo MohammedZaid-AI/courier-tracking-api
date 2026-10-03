@@ -8,6 +8,7 @@ COD and refunds. The adapter design lets more couriers be added later, ideally t
 APIs.
 
 - `GET /track/{courier}/{tracking_id}` returns `status` (`delivered`, `in_transit`, `returned`, `failed` or `unknown`), `events`, `last_updated`, and `payment_mode`. The only supported courier is `trackon`; any other name gives a typed `UNSUPPORTED_COURIER` error.
+- `POST /track/batch` takes up to 20 `{courier, tracking_id}` items and answers each one on its own: a bad item gets its typed error and never fails the rest.
 - The MCP tool `get_delivery_status(courier, tracking_id)` returns the same data plus a **refund hint**. The hint is a suggestion only; the tool never refunds or cancels anything.
 - The drift check warns when the courier page changes layout.
 
@@ -47,7 +48,7 @@ Details: [tests/fixtures/README.md](tests/fixtures/README.md).
 - **An honest User-Agent** that names this project and a contact URL. The project never pretends to be a browser or the courier's own site.
 - **No personal data stored.** Nothing is written to disk; results live only in the 5-minute in-memory cache. Proof-of-delivery, signature and NDR images are never fetched. The one exception is `drift --live --save`, which writes pages to `.drift/` (gitignored). It strips tokens and IPs automatically, but names, phone numbers and addresses must be redacted by hand before any page becomes a fixture. A test fails if a fixture ever holds a token, IP, unknown email or mobile number.
 - **Tests and the demo run offline.** In tests, any live network call fails the test; CI never calls the courier.
-- **Live calls only by hand:** when you run the API yourself, or `drift --live`.
+- **Live calls only by hand:** when you run the API yourself, `run_all_cases.py --live`, or `drift --live`. CI never makes live calls.
 
 ## Setup
 
@@ -80,17 +81,47 @@ $env:COURIER_TRACKING_CONTACT = "https://github.com/<you>/<repo>"     # replace 
 setx COURIER_TRACKING_CONTACT "https://github.com/<you>/<repo>"       # replace with your repo URL (permanent; open a new terminal)
 ```
 
-## Run the tests (offline)
+## Run the tests
+
+### Offline (default; CI runs this)
 
 ```bash
-pytest                              # all tests; any live network call fails the test
-python scripts/run_all_cases.py     # pass/fail table: delivered, in transit, RTO, invalid ID, site down
-python scripts/prepush.py           # all of the above plus a hand-done checklist before pushing
-python -m courier_tracking.drift    # drift check against the saved fixtures
+pytest                                  # all tests; any live network call fails the test
+python scripts/run_all_cases.py         # pass/fail table of every case, from saved fixtures
+python -m courier_tracking.drift        # drift check against the saved fixtures
+python scripts/prepush.py               # all of the above plus a hand-done checklist before pushing
 ```
 
-GitHub Actions runs `pytest`, the all-cases script and the offline drift check on every push.
-None of these commands calls a courier site.
+### Live (by hand only)
+
+```bash
+python scripts/run_all_cases.py --live                       # offline cases + checks against the real Trackon site
+python scripts/run_all_cases.py --live --id trackon=<AWB>    # ...plus one real tracking ID you are allowed to look up
+```
+
+`--live` makes about two requests to trackon.in (plus one per `--id`), at most one per second,
+with the honest User-Agent. Nothing is written to disk. Without a real ID it checks:
+- an unknown AWB gives `NOT_FOUND`;
+- a bad ID format gives `INVALID_TRACKING_ID`;
+- an unsupported courier gives `UNSUPPORTED_COURIER`;
+- a batch of mixed good and bad items still answers every item.
+
+With `--id` it also prints that shipment's status and events, with names, phone numbers and
+emails redacted (best effort). It refuses to run when the `CI` environment variable is set.
+
+Every row in the table says where its answer came from:
+
+| Label | Meaning |
+|---|---|
+| `offline (synthetic)` | Hand-built fixture |
+| `offline (real capture)` | Saved, redacted copy of the real Trackon page |
+| `offline (simulated outage)` | Network failure simulated in-process |
+| `offline (no request)` | Rejected before any request |
+| `live` | trackon.in was called just now |
+| `live (no request needed)` | Run in live mode, but rejected before any request |
+
+GitHub Actions runs `pytest`, the offline all-cases script and the offline drift check on every
+push. It never passes `--live`.
 
 ## Run the demo (offline)
 
@@ -113,6 +144,7 @@ These call the live Trackon site. Read [LIMITATIONS.md](LIMITATIONS.md) first, a
 ```bash
 uvicorn courier_tracking.api:app                      # then open http://127.0.0.1:8000/docs
 curl http://127.0.0.1:8000/track/trackon/<AWB>
+curl -X POST http://127.0.0.1:8000/track/batch -H "Content-Type: application/json"   -d '{"items": [{"courier": "trackon", "tracking_id": "<AWB>"}, {"courier": "trackon", "tracking_id": "12AB"}]}'
 
 python -m courier_tracking.mcp_server                 # MCP server over stdio
 
@@ -187,6 +219,8 @@ synthetic one.
 | 502 | `LAYOUT_CHANGED` | The response does not match what the parser expects (page changed, or a real layout never seen before). No status is guessed. Run the drift check. |
 | 503 | `COURIER_UNAVAILABLE` | The site is down, timed out or rate limited us, after retries |
 
+`POST /track/batch` always answers 200; each item carries `ok` and either `result` or the same typed `error`.
+
 ## Layout
 
 ```
@@ -199,6 +233,7 @@ courier_tracking/
   api.py             FastAPI app
   drift.py           drift check CLI
   refund_hint.py     COD / refund suggestion rules
+  redact.py          best-effort removal of names and phone numbers from printed output
   mcp_server.py      MCP tool get_delivery_status
 scripts/             run_all_cases.py, demo.py, prepush.py
 tests/fixtures/      saved pages and responses (live and synthetic)

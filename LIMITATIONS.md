@@ -1,5 +1,19 @@
 # Limitations
 
+## Summary
+
+- **What it does:** it reads Trackon's public tracking page and returns one clean JSON answer: delivered, in transit, returned, failed or unknown, with the events. An MCP tool adds a refund hint for COD and returned orders. The hint is only a suggestion; the tool never refunds or cancels anything.
+- **Only one courier:** Ekart's terms forbid automated access, Delhivery would need us to pretend to be its website, and others use CAPTCHAs. So we left them out.
+- **Not production ready:** Trackon's terms do not ban automated access, but they do not allow it either. This is a demonstration.
+- **Never tested on a real shipment:** no real tracking ID was available, so the parser was written against a page layout we could not see. If the real page does not match, the API says `LAYOUT_CHANGED` instead of guessing.
+- **It can break at any time:** the courier can change its page, block us, or change its terms. A drift check warns when the page changes.
+- **Polite by design:** at most one request per second, a cache, an honest User-Agent, and no personal data stored.
+- **The long-term fix:** official courier API agreements, or an aggregator contract, behind the same JSON shape and refund hint.
+
+The detailed sections follow.
+
+---
+
 **This is a demonstration project, not a production scraper.** It reads one courier's public
 tracking page (Trackon), which was built for people, not programs. It is tested offline, and it
 will break someday. This file explains why, what already limits it, and what the real fix is.

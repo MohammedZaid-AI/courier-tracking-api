@@ -60,3 +60,29 @@ class ErrorResponse(BaseModel):
     message: str
     courier: str | None = None
     tracking_id: str | None = None
+
+
+MAX_BATCH_ITEMS = 20
+
+
+class BatchItem(BaseModel):
+    courier: str
+    tracking_id: str
+
+
+class BatchRequest(BaseModel):
+    items: list[BatchItem] = Field(min_length=1, max_length=MAX_BATCH_ITEMS)
+
+
+class BatchItemResult(BaseModel):
+    courier: str
+    tracking_id: str
+    ok: bool
+    result: TrackingResult | None = None
+    error: ErrorResponse | None = None
+
+
+class BatchResponse(BaseModel):
+    results: list[BatchItemResult] = Field(description="Same order as the request items.")
+    ok: int
+    failed: int

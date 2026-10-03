@@ -124,3 +124,36 @@ def test_cache_expires(make_client):
     now[0] = 301
     client.get("/track/trackon/999000000001")
     assert len(calls) == 2
+
+
+def test_batch_mixed_items_each_get_their_own_answer(make_client):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        name = "delivered.synthetic.html" if request.url.params.get("awb") == "999000000001" else "invalid.live.html"
+        return httpx.Response(200, text=fixture("trackon", name))
+
+    client = make_client(handler)
+    items = [
+        {"courier": "trackon", "tracking_id": "999000000001"},
+        {"courier": "trackon", "tracking_id": "100000000000"},
+        {"courier": "trackon", "tracking_id": "12AB"},
+        {"courier": "bluedart", "tracking_id": "12345678901"},
+        {"courier": "trackon", "tracking_id": "999000000001"},  # repeated: looked up once
+    ]
+    resp = client.post("/track/batch", json={"items": items})
+    assert resp.status_code == 200
+    body = resp.json()
+    got = [r["result"]["status"] if r["ok"] else r["error"]["error"] for r in body["results"]]
+    assert got == ["delivered", "NOT_FOUND", "INVALID_TRACKING_ID", "UNSUPPORTED_COURIER", "delivered"]
+    assert [r["tracking_id"] for r in body["results"]] == [i["tracking_id"] for i in items]
+    assert (body["ok"], body["failed"]) == (2, 3)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("count", [0, 21])
+def test_batch_size_is_limited(make_client, count):
+    client = make_client(fake_couriers())
+    items = [{"courier": "trackon", "tracking_id": "999000000001"}] * count
+    assert client.post("/track/batch", json={"items": items}).status_code == 422

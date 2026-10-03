@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 from . import __version__
 from .errors import TrackingError
-from .schema import ErrorResponse, TrackingResult
+from .schema import BatchRequest, BatchResponse, ErrorResponse, TrackingResult
 from .service import COURIERS, TrackingService
 
 _ERROR_RESPONSES = {
@@ -59,6 +59,12 @@ def create_app(service: TrackingService | None = None) -> FastAPI:
     @app.get("/track/{courier}/{tracking_id}", response_model=TrackingResult, responses=_ERROR_RESPONSES)
     async def track(courier: str, tracking_id: str, request: Request) -> TrackingResult:
         return await request.app.state.service.track(courier, tracking_id)
+
+    @app.post("/track/batch", response_model=BatchResponse)
+    async def track_batch(body: BatchRequest, request: Request) -> BatchResponse:
+        """Up to {MAX_BATCH_ITEMS} lookups in one call. Always 200: each item has ok=true with a
+        result, or ok=false with the same typed error the single endpoint would give."""
+        return await request.app.state.service.track_many(body.items)
 
     return app
 

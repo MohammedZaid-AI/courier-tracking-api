@@ -7,9 +7,9 @@ from collections.abc import Callable
 
 from .adapters.base import CourierAdapter
 from .adapters.trackon import TrackonAdapter
-from .errors import UnsupportedCourierError
+from .errors import TrackingError, UnsupportedCourierError
 from .http import PoliteClient
-from .schema import TrackingResult
+from .schema import BatchItem, BatchItemResult, BatchResponse, ErrorResponse, TrackingResult
 
 COURIERS: dict[str, type[CourierAdapter]] = {
     "trackon": TrackonAdapter,
@@ -51,6 +51,27 @@ class TrackingService:
         result = await adapter.track(tid)
         self._cache[key] = (self._clock(), result)
         return result
+
+    async def track_many(self, items: list[BatchItem]) -> BatchResponse:
+        """Look up each item on its own: one bad item never fails the batch.
+
+        Items run one after another, so the per-courier rate limit still applies;
+        repeated items in one batch are looked up once.
+        """
+        seen: dict[tuple[str, str], BatchItemResult] = {}
+        results = []
+        for item in items:
+            key = (item.courier.strip().lower(), item.tracking_id.strip().upper())
+            if key not in seen:
+                try:
+                    found = await self.track(item.courier, item.tracking_id)
+                    seen[key] = BatchItemResult(courier=item.courier, tracking_id=item.tracking_id, ok=True, result=found)
+                except TrackingError as exc:
+                    error = ErrorResponse(error=exc.code, message=exc.message, courier=exc.courier, tracking_id=exc.tracking_id)
+                    seen[key] = BatchItemResult(courier=item.courier, tracking_id=item.tracking_id, ok=False, error=error)
+            results.append(seen[key])
+        ok = sum(r.ok for r in results)
+        return BatchResponse(results=results, ok=ok, failed=len(results) - ok)
 
     async def aclose(self) -> None:
         await self.client.aclose()
