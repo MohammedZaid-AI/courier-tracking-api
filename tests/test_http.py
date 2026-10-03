@@ -148,3 +148,18 @@ async def test_rate_limiter_spaces_requests_per_host():
     assert clock.sleeps == [1.0, 1.0]
     await limiter.wait("b.example")  # different host, no wait
     assert clock.sleeps == [1.0, 1.0]
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "post"])
+async def test_client_is_read_only(method):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200)
+
+    client, _ = make_client(handler)
+    async with client:
+        with pytest.raises(ValueError, match="read-only"):
+            await client.request(method, "https://courier.example/x", courier="test")
+    assert calls == []

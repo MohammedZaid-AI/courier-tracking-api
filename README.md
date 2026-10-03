@@ -146,26 +146,98 @@ uvicorn courier_tracking.api:app                      # then open http://127.0.0
 curl http://127.0.0.1:8000/track/trackon/<AWB>
 curl -X POST http://127.0.0.1:8000/track/batch -H "Content-Type: application/json"   -d '{"items": [{"courier": "trackon", "tracking_id": "<AWB>"}, {"courier": "trackon", "tracking_id": "12AB"}]}'
 
-python -m courier_tracking.mcp_server                 # MCP server over stdio
+courier-tracking-mcp                                  # MCP server over stdio, live mode (see below)
 
 python -m courier_tracking.drift --live               # check the live page against the baseline
 python -m courier_tracking.drift --live --id trackon=<AWB> --save   # also parse a real ID, save redacted responses to .drift/
 ```
 
-To use the MCP tool from an MCP client (for example Claude Desktop), add the following. Use the
-full path to the venv's Python: `<repo>/.venv/bin/python` on macOS and Linux, or
-`<repo>\\.venv\\Scripts\\python.exe` on Windows (backslashes doubled in JSON).
+## Use it from an MCP client
+
+The MCP server has one tool, `get_delivery_status(courier, tracking_id)`. It is **read-only**:
+- it is the only tool, and it is marked `readOnlyHint: true`, `destructiveHint: false`;
+- the HTTP client refuses anything but GET and HEAD;
+- nothing is written to disk;
+- there is no code that refunds, cancels or changes an order.
+
+It needs no API keys.
+
+### 1. Start it
+
+`pip install -e ".[dev]"` installs a `courier-tracking-mcp` command in the venv. The server speaks
+MCP over stdio.
+
+```bash
+courier-tracking-mcp --offline                 # answers from saved fixtures, never the network
+COURIER_TRACKING_OFFLINE=1 courier-tracking-mcp   # same; use this when a client drops extra arguments
+courier-tracking-mcp                           # live: looks up trackon.in (read LIMITATIONS.md first)
+```
+
+`python -m courier_tracking.mcp_server` works too. At startup the server prints its mode to stderr
+(`starting in OFFLINE ...` or `starting in LIVE ...`), and every answer has a `data_source` field.
+
+In offline mode these synthetic IDs work:
+
+| tracking_id | Answer |
+|---|---|
+| `999000000001` | delivered (prepaid) |
+| `999000000002` | in transit (COD) |
+| `999000000003` | returned, COD: refund hint `no_refund_due` |
+| `999000000005` | returned, prepaid: refund hint `consider_refund` |
+| `999000000004` | failed attempt: hint "wait, do not cancel yet" |
+| `100000000000` | `NOT_FOUND` (real captured page) |
+
+### 2. Try it with the MCP Inspector (offline)
+
+Use the full path to the command: `.venv/bin/courier-tracking-mcp` on macOS and Linux,
+`.venv\Scripts\courier-tracking-mcp.exe` on Windows.
+
+```bash
+npx @modelcontextprotocol/inspector@latest --cli <path-to>/courier-tracking-mcp -e COURIER_TRACKING_OFFLINE=1 --method tools/list
+npx @modelcontextprotocol/inspector@latest --cli <path-to>/courier-tracking-mcp -e COURIER_TRACKING_OFFLINE=1 --method tools/call --tool-name get_delivery_status --tool-arg courier=trackon --tool-arg tracking_id=999000000005
+```
+
+Expected: the tool list shows only `get_delivery_status`, with its description and input schema.
+The call returns `"status": "returned"`, `"data_source": "offline fixtures: ..."` and a
+`refund_hint` with `"is_suggestion": true`. A bad ID (`12AB`) returns `ok: false` with
+`INVALID_TRACKING_ID`. An unsupported courier is rejected by the input schema with a clear
+message.
+
+Two details:
+- Pass offline mode with `-e COURIER_TRACKING_OFFLINE=1` **after** the server command. Inspector v2 does not forward extra arguments such as `--offline` to the server.
+- Running `npx @modelcontextprotocol/inspector@latest` without `--cli` opens the web UI instead.
+
+### 3. Add it to Claude Code
+
+```bash
+claude mcp add courier-tracking -e COURIER_TRACKING_OFFLINE=1 -- <full-path-to>/courier-tracking-mcp
+```
+
+Drop `-e COURIER_TRACKING_OFFLINE=1` to use the live site. Check with `claude mcp list`. Then ask
+Claude, for example: "Parcel 999000000005 came back. Should I refund?"
+
+### 4. Or add it to Claude Desktop
+
+In `claude_desktop_config.json` (no secrets needed):
 
 ```json
 {
   "mcpServers": {
     "courier-tracking": {
-      "command": "/full/path/to/<repo>/.venv/bin/python",
-      "args": ["-m", "courier_tracking.mcp_server"]
+      "command": "/full/path/to/courier-tracking-api/.venv/bin/courier-tracking-mcp",
+      "args": [],
+      "env": { "COURIER_TRACKING_OFFLINE": "1" }
     }
   }
 }
 ```
+
+On Windows the command is
+`C:\path\to\courier-tracking-api\.venv\Scripts\courier-tracking-mcp.exe`, with backslashes
+doubled in JSON. Remove the `env` block for live mode.
+
+`tests/test_mcp_stdio.py` does the same thing in CI. It starts the server as a subprocess over
+stdio in offline mode, lists the tools, sends bad input, then makes a good call in the same session.
 
 ## How to verify with a real ID
 
@@ -234,7 +306,8 @@ courier_tracking/
   drift.py           drift check CLI
   refund_hint.py     COD / refund suggestion rules
   redact.py          best-effort removal of names and phone numbers from printed output
-  mcp_server.py      MCP tool get_delivery_status
+  mcp_server.py      MCP tool get_delivery_status (command: courier-tracking-mcp)
+  offline.py         offline mode: answers from the saved fixtures
 scripts/             run_all_cases.py, demo.py, prepush.py
 tests/fixtures/      saved pages and responses (live and synthetic)
 ```

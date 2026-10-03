@@ -17,6 +17,9 @@ dependencies = [
     "mcp>=2.2,<3",
 ]
 
+[project.scripts]
+courier-tracking-mcp = "courier_tracking.mcp_server:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8",

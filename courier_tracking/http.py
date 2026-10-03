@@ -37,6 +37,9 @@ USER_AGENT = build_user_agent()
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
+# Read-only by construction: the client refuses anything that could change state on a courier site.
+READ_ONLY_METHODS = frozenset({"GET", "HEAD"})
+
 
 class HostRateLimiter:
     """At most one request per `min_interval` seconds per host."""
@@ -96,8 +99,11 @@ class PoliteClient:
     async def request(self, method: str, url: str, *, courier: str, **kwargs) -> httpx.Response:
         """Send with retries. Returns any non-retryable response (incl. 4xx) to the caller.
 
-        Raises CourierUnavailableError once retries are exhausted.
+        Raises CourierUnavailableError once retries are exhausted, and ValueError for any method
+        other than GET/HEAD (this client never writes to a courier site).
         """
+        if method.upper() not in READ_ONLY_METHODS:
+            raise ValueError(f"{method} refused: the courier client is read-only (GET/HEAD only)")
         host = urlsplit(url).hostname or ""
         last_problem = "unknown error"
         last_response: httpx.Response | None = None
